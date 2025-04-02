@@ -9,12 +9,20 @@ const urls = [];
 // Keep track of the last known stock signature for each URL
 const lastKnownStock = new Map();
 
+// Define a constant for the user agent to avoid duplication
+const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36';
+
 function stringifyStock(results) {
     return results.map(entry => `${entry.store}:${entry.stock}`).join('|');
 }
 
 function getRandomDelay() {
     return config.baseDelay + Math.floor(Math.random() * config.jitter);
+}
+
+// A helper function to pause execution
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 async function scrapePageTask(page, url) {
@@ -38,34 +46,35 @@ async function scrapePageTask(page, url) {
     }
 }
 
-async function startMonitoring() {
-    let cluster = await launchCluster();
-    
-    // Define the cluster task
-    await cluster.task(async ({ page, data: url }) => {
-        // Set a user-agent
-        await page.setUserAgent(
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
-        );
+// Configures the cluster task with common logic.
+function configureClusterTask(cluster) {
+    cluster.task(async ({ page, data: url }) => {
+        await page.setUserAgent(USER_AGENT);
         await scrapePageTask(page, url);
     });
+}
+
+// Monitors a single URL in an infinite loop with a delay between checks.
+async function monitorUrl(url, cluster) {
+    while (true) {
+        try {
+            await cluster.execute(url);
+        } catch (err) {
+            console.error(`Error executing cluster task for ${url}:`, err.message);
+        }
+        const delay = getRandomDelay();
+        console.log(`\nCompleted check for ${url}. Waiting ${delay / 1000}s...\n`);
+        await sleep(delay);
+    }
+}
+
+async function startMonitoring() {
+    let cluster = await launchCluster();
+    configureClusterTask(cluster);
     
-    // Schedule each URL to run in its own loop
+    // Schedule each URL to run in its own loop, staggered by 10 seconds
     urls.forEach((url, index) => {
-        setTimeout(() => {
-            (async function monitor() {
-                while (true) {
-                    try {
-                        await cluster.execute(url);
-                    } catch (err) {
-                        console.error(`Error executing cluster task for ${url}:`, err.message);
-                    }
-                    const delay = getRandomDelay();
-                    console.log(`\n🔄 Completed check for ${url}. Waiting ${delay / 1000}s...\n`);
-                    await new Promise(res => setTimeout(res, delay));
-                }
-            })();
-        }, index * 10000); // stagger each start by 10s
+        setTimeout(() => monitorUrl(url, cluster), index * 10000);
     });
     
     // Periodically restart the cluster to clear stale state
@@ -73,12 +82,7 @@ async function startMonitoring() {
         console.log('Restarting browser cluster');
         await cluster.close();
         cluster = await launchCluster();
-        await cluster.task(async ({ page, data: url }) => {
-            await page.setUserAgent(
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
-            );
-            await scrapePageTask(page, url);
-        });
+        configureClusterTask(cluster);
     }, config.restartIntervalMs);
 }
 

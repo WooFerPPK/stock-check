@@ -17,7 +17,7 @@ async function sendPushoverNotification(title, message) {
       title,
       message,
     });
-    console.log(`Pushover alert sent: ${title}`);
+    console.log(`📲 Pushover alert sent: ${title}`);
   } catch (err) {
     console.error('Failed to send Pushover notification:', err.message);
   }
